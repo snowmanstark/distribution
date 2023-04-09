@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"encoding/json"
+	"github.com/docker/distribution/registry/storage/driver"
 	"net/http"
 
 	"github.com/docker/distribution"
@@ -16,14 +17,23 @@ func tagsDispatcher(ctx *Context, r *http.Request) http.Handler {
 		Context: ctx,
 	}
 
-	return handlers.MethodHandler{
-		"GET": http.HandlerFunc(tagsHandler.GetTags),
+	ref := getReference(ctx)
+	tagsHandler.Tag = ref
+
+	tHandler := handlers.MethodHandler{
+		http.MethodGet: http.HandlerFunc(tagsHandler.GetTags),
 	}
+
+	if !ctx.readOnly {
+		tHandler[http.MethodDelete] = http.HandlerFunc(tagsHandler.DeleteTag)
+	}
+	return tHandler
 }
 
 // tagsHandler handles requests for lists of tags under a repository name.
 type tagsHandler struct {
 	*Context
+	Tag string
 }
 
 type tagsAPIResponse struct {
@@ -57,4 +67,21 @@ func (th *tagsHandler) GetTags(w http.ResponseWriter, r *http.Request) {
 		th.Errors = append(th.Errors, errcode.ErrorCodeUnknown.WithDetail(err))
 		return
 	}
+}
+
+func (th *tagsHandler) DeleteTag(w http.ResponseWriter, r *http.Request) {
+	defer r.Body.Close()
+
+	tagService := th.Repository.Tags(th.Context)
+	if err := tagService.Untag(th.Context, th.Tag); err != nil {
+		switch err.(type) {
+		case distribution.ErrTagUnknown, driver.PathNotFoundError:
+			th.Errors = append(th.Errors, v2.ErrorCodeManifestUnknown.WithDetail(err))
+		default:
+			th.Errors = append(th.Errors, errcode.ErrorCodeUnknown.WithDetail(err))
+		}
+		return
+	}
+	w.WriteHeader(http.StatusAccepted)
+	return
 }
